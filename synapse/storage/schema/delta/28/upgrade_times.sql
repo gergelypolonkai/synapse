@@ -1,4 +1,4 @@
-/* Copyright 2015, 2016 OpenMarket Ltd
+/* Copyright 2016 OpenMarket Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,7 +13,9 @@
  * limitations under the License.
  */
 
+/*
+ * Stores the timestamp when a user upgraded from a guest to a full user, if
+ * that happened.
+ */
 
-CREATE INDEX events_order_topo_stream_room ON events(
-    topological_ordering, stream_ordering, room_id
-);
+ALTER TABLE users ADD COLUMN upgrade_ts BIGINT;

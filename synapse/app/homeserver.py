@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-# Copyright 2014, 2015 OpenMarket Ltd
+# Copyright 2014-2016 OpenMarket Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -42,6 +42,12 @@ from synapse.storage.prepare_database import UpgradeDatabaseException
 from synapse.server import HomeServer
 
 
+from twisted.conch.manhole import ColoredManhole
+from twisted.conch.insults import insults
+from twisted.conch import manhole_ssh
+from twisted.cred import checkers, portal
+
+
 from twisted.internet import reactor, task, defer
 from twisted.application import service
 from twisted.enterprise import adbapi
@@ -68,7 +74,6 @@ from synapse.replication.resource import ReplicationResource, REPLICATION_PREFIX
 from synapse import events
 
 from daemonize import Daemonize
-import twisted.manhole.telnet
 
 import synapse
 
@@ -186,6 +191,7 @@ class SynapseHomeServer(HomeServer):
                         "/_matrix/client/r0": client_resource,
                         "/_matrix/client/unstable": client_resource,
                         "/_matrix/client/v2_alpha": client_resource,
+                        "/_matrix/client/versions": client_resource,
                     })
 
                 if name == "federation":
@@ -252,10 +258,21 @@ class SynapseHomeServer(HomeServer):
             if listener["type"] == "http":
                 self._listener_http(config, listener)
             elif listener["type"] == "manhole":
-                f = twisted.manhole.telnet.ShellFactory()
-                f.username = "matrix"
-                f.password = "rabbithole"
-                f.namespace['hs'] = self
+                checker = checkers.InMemoryUsernamePasswordDatabaseDontUse(
+                    matrix="rabbithole"
+                )
+
+                rlm = manhole_ssh.TerminalRealm()
+                rlm.chainedProtocolFactory = lambda: insults.ServerProtocol(
+                    ColoredManhole,
+                    {
+                        "__name__": "__console__",
+                        "hs": self,
+                    }
+                )
+
+                f = manhole_ssh.ConchFactory(portal.Portal(rlm, [checker]))
+
                 reactor.listenTCP(
                     listener["port"],
                     f,
@@ -692,6 +709,7 @@ def run(hs):
 
     @defer.inlineCallbacks
     def phone_stats_home():
+        logger.info("Gathering stats for reporting")
         now = int(hs.get_clock().time())
         uptime = int(now - start_time)
         if uptime < 0:
@@ -722,6 +740,7 @@ def run(hs):
 
     if hs.config.report_stats:
         phone_home_task = task.LoopingCall(phone_stats_home)
+        logger.info("Scheduling stats reporting for 24 hour intervals")
         phone_home_task.start(60 * 60 * 24, now=False)
 
     def in_thread():

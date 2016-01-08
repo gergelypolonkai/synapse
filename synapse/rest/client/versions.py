@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright 2014-2016 OpenMarket Ltd
+# Copyright 2016 OpenMarket Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,19 +13,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-""" This package includes all the federation specific logic.
-"""
+from synapse.http.servlet import RestServlet
 
-from .replication import ReplicationLayer
-from .transport import TransportLayer
+import logging
+import re
+
+logger = logging.getLogger(__name__)
 
 
-def initialize_http_replication(homeserver):
-    transport = TransportLayer(
-        homeserver,
-        homeserver.hostname,
-        server=homeserver.get_resource_for_federation(),
-        client=homeserver.get_http_client()
-    )
+class VersionsRestServlet(RestServlet):
+    PATTERNS = [re.compile("^/_matrix/client/versions$")]
 
-    return ReplicationLayer(homeserver, transport)
+    def on_GET(self, request):
+        return (200, {
+            "versions": [
+                "r0.0.1",
+            ]
+        })
+
+
+def register_servlets(http_server):
+    VersionsRestServlet().register(http_server)
