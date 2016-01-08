@@ -23,6 +23,8 @@ from synapse.util.logutils import log_function
 from synapse.types import UserID
 import synapse.metrics
 
+from canonicaljson import encode_canonical_json
+
 from ._base import BaseHandler
 
 import logging
@@ -1139,6 +1141,33 @@ class PresenceHandler(BaseHandler):
             content={"push": [user_state, ], }
         )
 
+    def get_all_presence_updates(self, last_id, current_id, limit):
+        """Return all the presence updates happened since the last id"""
+        # TODO: Respect the limit.
+        # TODO: Find a way to do this without scanning the entire presence map.
+        rows = []
+        for user, cached in self._user_cachemap.items():
+            if last_id < cached.serial and cached.serial <= current_id:
+                rows.append((
+                    cached.serial,
+                    user.to_string(),
+                    encode_canonical_json(cached.state),
+                ))
+
+        for serial, user_ids in self._remote_offline_serials:
+            if serial <= last_id:
+                break
+
+            if serial > current_id:
+                continue
+
+            for user_id in user_ids:
+                rows.append(cached.serial, user_id, '{"presence":"offline"}')
+
+        rows.sort()
+
+        return rows
+
 
 class PresenceEventSource(object):
     def __init__(self, hs):
@@ -1183,7 +1212,6 @@ class PresenceEventSource(object):
             updates.append(cached.make_event(user=observed_user, clock=clock))
 
         # TODO(paul): limit
-
         for serial, user_ids in presence._remote_offline_serials:
             if serial <= from_key:
                 break
@@ -1197,6 +1225,7 @@ class PresenceEventSource(object):
                     "type": "m.presence",
                     "content": {"user_id": u, "presence": PresenceState.OFFLINE},
                 })
+
         # TODO(paul): For the v2 API we want to tell the client their from_key
         #   is too old if we fell off the end of the _remote_offline_serials
         #   list, and get them to invalidate+resync. In v1 we have no such

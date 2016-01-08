@@ -72,7 +72,7 @@ class ReplicationToken(collections.namedtuple("ReplicationToken", (
 
 STREAM_NAMES = (
     ("events",),
-    (),
+    ("presence",),
     (),
     (),
     ("user_account_data", "room_account_data", "tag_account_data",),
@@ -89,6 +89,7 @@ class ReplicationResource(Resource):
         self.version_string = hs.version_string
         self.store = hs.get_datastore()
         self.sources = hs.get_event_sources()
+        self.presence_handler = hs.get_handlers().presence_handler
 
     def render_GET(self, request):
         self._async_render_GET(request)
@@ -122,6 +123,7 @@ class ReplicationResource(Resource):
         total = 0
         total += yield self.account_data(request, current_token, limit)
         total += yield self.events(request, current_token, limit)
+        total += yield self.presence(request, current_token, limit)
         total += self.streams(request, current_token)
         logger.info("Replicated %d rows", total)
 
@@ -173,6 +175,23 @@ class ReplicationResource(Resource):
             total += write_header_and_rows(
                 request, "backfill", backfill_rows,
                 ("stream_id", "internal", "json")
+            )
+        defer.returnValue(total)
+
+    @defer.inlineCallbacks
+    def presence(self, request, current_token, limit):
+        current_stream_id = current_token.presence
+
+        request_presence = parse_integer(request, "presence")
+
+        total = 0
+        if request_presence is not None:
+            presence_rows = yield self.presence_handler.get_all_presence_updates(
+                request_presence, current_stream_id, limit
+            )
+            total += write_header_and_rows(
+                request, "presence", presence_rows,
+                ("stream_id", "user_id", "status")
             )
         defer.returnValue(total)
 

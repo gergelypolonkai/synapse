@@ -1073,7 +1073,7 @@ class EventsStore(SQLBaseStore):
                 " JOIN event_json as ej"
                 " ON e.event_id = ej.event_id AND e.room_id = ej.room_id"
                 " WHERE ? < e.stream_ordering AND e.stream_ordering <= ?"
-                " ORDER BY e.stream_ordering DESC"
+                " ORDER BY e.stream_ordering ASC"
                 " LIMIT ?"
             )
             txn.execute(sql, (last_forward_id, current_forward_id, limit))

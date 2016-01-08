@@ -60,7 +60,7 @@ def main():
         try:
             results = replicate(server, streams)
         except:
-            sys.stdout.write("connection_lost()\n")
+            sys.stdout.write("connection_lost("+ repr(streams) + ")\n")
             break
         for update in results.values():
             for row in update.rows:
