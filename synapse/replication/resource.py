@@ -13,10 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from twisted.web.resource import Resource
-from synapse.http.servlet import parse_integer
+from synapse.http.servlet import parse_integer, parse_string
 from synapse.http.server import request_handler
+from synapse.types import StreamToken
 
+from twisted.web.resource import Resource
 from twisted.web.server import NOT_DONE_YET
 from twisted.internet import defer
 
@@ -63,10 +64,12 @@ class ReplicationResource(Resource):
         def write_header(name, stream_id, count, fields):
             write_row((name, stream_id, count, len(fields)) + fields)
 
-        def write_header_and_rows(name, rows, fields):
+        def write_header_and_rows(name, rows, fields, stream_id=None):
             if not rows:
                 return 0
-            write_header(name, rows[-1][0], len(rows), fields)
+            if stream_id is None:
+                stream_id = rows[-1][0]
+            write_header(name, stream_id, len(rows), fields)
             for row in rows:
                 write_row(row)
             return len(rows)
@@ -78,11 +81,50 @@ class ReplicationResource(Resource):
         total += yield self.account_data(
             request, write_header_and_rows, current_token, limit
         )
+        total += yield self.streams(
+            request, write_header_and_rows, current_token
+        )
         logger.info("Replicated %d rows", total)
+
         request.finish()
 
+    def streams(self, request, write_header_and_rows, current_token):
+        request_token = parse_string(request, "streams")
+        streams = []
+
+        if request_token is not None:
+            if request_token != "-1":
+                request_token = StreamToken.from_string(request_token)
+            streams.extend(self.account_data_streams(
+                current_token, request_token
+            ))
+            if streams:
+                write_header_and_rows(
+                    "streams", streams, ("name", "stream_id"),
+                    stream_id=current_token.to_string()
+                )
+        return len(streams)
+
+    def account_data_streams(self, current_token, request_token="-1"):
+        current_stream_id = int(current_token.account_data_key)
+
+        stream_updated = (
+            request_token == "-1"
+            or int(request_token.account_data_key) < current_stream_id
+        )
+
+        if stream_updated:
+            return (
+                ("user_account_data", current_stream_id),
+                ("room_account_data", current_stream_id),
+                ("tag_account_data", current_stream_id),
+            )
+        else:
+            return ()
+
     @defer.inlineCallbacks
-    def account_data(self, request, write_header_and_rows, current_token, limit):
+    def account_data(self, request, write_header_and_rows, current_token,
+                     limit):
         current_stream_id = int(current_token.account_data_key)
 
         user_account_data = parse_integer(request, "user_account_data")
