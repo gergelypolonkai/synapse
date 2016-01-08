@@ -73,7 +73,7 @@ class ReplicationToken(collections.namedtuple("ReplicationToken", (
 STREAM_NAMES = (
     ("events",),
     ("presence",),
-    (),
+    ("typing",),
     (),
     ("user_account_data", "room_account_data", "tag_account_data",),
     ("backfill",),
@@ -90,6 +90,7 @@ class ReplicationResource(Resource):
         self.store = hs.get_datastore()
         self.sources = hs.get_event_sources()
         self.presence_handler = hs.get_handlers().presence_handler
+        self.typing_handler = hs.get_handlers().typing_notification_handler
 
     def render_GET(self, request):
         self._async_render_GET(request)
@@ -124,6 +125,7 @@ class ReplicationResource(Resource):
         total += yield self.account_data(request, current_token, limit)
         total += yield self.events(request, current_token, limit)
         total += yield self.presence(request, current_token, limit)
+        total += yield self.typing(request, current_token, limit)
         total += self.streams(request, current_token)
         logger.info("Replicated %d rows", total)
 
@@ -192,6 +194,23 @@ class ReplicationResource(Resource):
             total += write_header_and_rows(
                 request, "presence", presence_rows,
                 ("stream_id", "user_id", "status")
+            )
+        defer.returnValue(total)
+
+    @defer.inlineCallbacks
+    def typing(self, request, current_token, limit):
+        current_stream_id = current_token.presence
+
+        request_typing = parse_integer(request, "typing")
+
+        total = 0
+        if request_typing is not None:
+            typing_rows = yield self.typing_handler.get_all_typing_updates(
+                request_typing, current_stream_id, limit
+            )
+            total += write_header_and_rows(
+                request, "typing", typing_rows,
+                ("stream_id", "room_id", "typing")
             )
         defer.returnValue(total)
 
