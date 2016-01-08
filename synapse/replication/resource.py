@@ -15,12 +15,12 @@
 
 from synapse.http.servlet import parse_integer, parse_string
 from synapse.http.server import request_handler
-from synapse.types import StreamToken
 
 from twisted.web.resource import Resource
 from twisted.web.server import NOT_DONE_YET
 from twisted.internet import defer
 
+import collections
 import logging
 
 logger = logging.getLogger(__name__)
@@ -33,6 +33,51 @@ def encode_item(item):
         return item.encode("UTF-8")
     except:
         return str(item)
+
+
+def write_row(request, row):
+    row_bytes = b"\xFE".join(encode_item(item) for item in row)
+    request.write(row_bytes + b"\xFF")
+
+
+def write_header(request, name, stream_id, count, fields):
+    write_row(request, (name, stream_id, count, len(fields)) + fields)
+
+
+def write_header_and_rows(request, name, rows, fields, stream_id=None):
+    if not rows:
+        return 0
+    if stream_id is None:
+        stream_id = rows[-1][0]
+    write_header(request, name, stream_id, len(rows), fields)
+    for row in rows:
+        write_row(request, row)
+    return len(rows)
+
+
+class ReplicationToken(collections.namedtuple("ReplicationToken", (
+    "events", "presence", "typing", "receipts", "account_data", "backfill",
+))):
+    __slots__ = []
+
+    def __new__(cls, *args):
+        if len(args) == 1:
+            return cls(*(int(value) for value in args[0].split("/")))
+        else:
+            return super(ReplicationToken, cls).__new__(cls, *args)
+
+    def __str__(self):
+        return "/".join(str(value) for value in self)
+
+
+STREAM_NAMES = (
+    ("events",),
+    (),
+    (),
+    (),
+    ("user_account_data", "room_account_data", "tag_account_data",),
+    ("backfill",),
+)
 
 
 class ReplicationResource(Resource):
@@ -49,83 +94,91 @@ class ReplicationResource(Resource):
         self._async_render_GET(request)
         return NOT_DONE_YET
 
+    @defer.inlineCallbacks
+    def current_replication_token(self):
+        stream_token = yield self.sources.get_current_token()
+        backfill_token = yield self.store.get_current_backfill_token()
+
+        defer.returnValue(ReplicationToken(
+            stream_token.room_stream_id,
+            int(stream_token.presence_key),
+            int(stream_token.typing_key),
+            int(stream_token.receipt_key),
+            int(stream_token.account_data_key),
+            backfill_token,
+        ))
+
     @request_handler
     @defer.inlineCallbacks
     def _async_render_GET(self, request):
 
-        current_token = yield self.sources.get_current_token()
+        current_token = yield self.current_replication_token()
 
         logger.info("Replicating up to %r", current_token)
-
-        def write_row(row):
-            row_bytes = b"\xFE".join(encode_item(item) for item in row)
-            request.write(row_bytes + b"\xFF")
-
-        def write_header(name, stream_id, count, fields):
-            write_row((name, stream_id, count, len(fields)) + fields)
-
-        def write_header_and_rows(name, rows, fields, stream_id=None):
-            if not rows:
-                return 0
-            if stream_id is None:
-                stream_id = rows[-1][0]
-            write_header(name, stream_id, len(rows), fields)
-            for row in rows:
-                write_row(row)
-            return len(rows)
 
         limit = parse_integer(request, "limit", 100)
 
         request.setHeader(b"Content-Type", b"application/x-synapse")
         total = 0
-        total += yield self.account_data(
-            request, write_header_and_rows, current_token, limit
-        )
-        total += yield self.streams(
-            request, write_header_and_rows, current_token
-        )
+        total += yield self.account_data(request, current_token, limit)
+        total += yield self.events(request, current_token, limit)
+        total += self.streams(request, current_token)
         logger.info("Replicated %d rows", total)
 
         request.finish()
 
-    def streams(self, request, write_header_and_rows, current_token):
+    def streams(self, request, current_token):
         request_token = parse_string(request, "streams")
+
         streams = []
 
         if request_token is not None:
-            if request_token != "-1":
-                request_token = StreamToken.from_string(request_token)
-            streams.extend(self.account_data_streams(
-                current_token, request_token
-            ))
+            if request_token == "-1":
+                for names, stream_id in zip(STREAM_NAMES, current_token):
+                    streams.extend((name, stream_id) for name in names)
+            else:
+                items = zip(STREAM_NAMES, current_token, request_token)
+                for names, last_id, current_id in items:
+                    if last_id < current_id:
+                        streams.extend((name, current_id) for name in names)
+
             if streams:
                 write_header_and_rows(
-                    "streams", streams, ("name", "stream_id"),
-                    stream_id=current_token.to_string()
+                    request, "streams", streams, ("name", "stream_id"),
+                    stream_id=current_token
                 )
+
         return len(streams)
 
-    def account_data_streams(self, current_token, request_token="-1"):
-        current_stream_id = int(current_token.account_data_key)
+    @defer.inlineCallbacks
+    def events(self, request, current_token, limit):
+        request_events = parse_integer(request, "events")
+        request_backfill = parse_integer(request, "backfill")
 
-        stream_updated = (
-            request_token == "-1"
-            or int(request_token.account_data_key) < current_stream_id
-        )
-
-        if stream_updated:
-            return (
-                ("user_account_data", current_stream_id),
-                ("room_account_data", current_stream_id),
-                ("tag_account_data", current_stream_id),
+        total = 0
+        if request_events is not None or request_backfill is not None:
+            if request_events is None:
+                request_events = current_token.events
+            if request_backfill is None:
+                request_backfill = current_token.backfill
+            events_rows, backfill_rows = yield self.store.get_all_new_events(
+                request_backfill, request_events,
+                current_token.backfill, current_token.events,
+                limit
             )
-        else:
-            return ()
+            total += write_header_and_rows(
+                request, "events", events_rows,
+                ("stream_id", "internal", "json")
+            )
+            total += write_header_and_rows(
+                request, "backfill", backfill_rows,
+                ("stream_id", "internal", "json")
+            )
+        defer.returnValue(total)
 
     @defer.inlineCallbacks
-    def account_data(self, request, write_header_and_rows, current_token,
-                     limit):
-        current_stream_id = int(current_token.account_data_key)
+    def account_data(self, request, current_token, limit):
+        current_stream_id = current_token.account_data
 
         user_account_data = parse_integer(request, "user_account_data")
         room_account_data = parse_integer(request, "room_account_data")
@@ -141,11 +194,11 @@ class ReplicationResource(Resource):
                 user_account_data, room_account_data, current_stream_id, limit
             )
             total += write_header_and_rows(
-                "user_account_data", user_rows,
+                request, "user_account_data", user_rows,
                 ("stream_id", "user_id", "type", "content")
             )
             total += write_header_and_rows(
-                "room_account_data", room_rows,
+                request, "room_account_data", room_rows,
                 ("stream_id", "user_id", "room_id", "type", "content")
             )
 
@@ -154,7 +207,7 @@ class ReplicationResource(Resource):
                 tag_account_data, current_stream_id, limit
             )
             total += write_header_and_rows(
-                "tag_account_data", tag_rows,
+                request, "tag_account_data", tag_rows,
                 ("stream_id", "user_id", "room_id", "tag", "content")
             )
 
