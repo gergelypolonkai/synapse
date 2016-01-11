@@ -74,7 +74,7 @@ STREAM_NAMES = (
     ("events",),
     ("presence",),
     ("typing",),
-    (),
+    ("receipts",),
     ("user_account_data", "room_account_data", "tag_account_data",),
     ("backfill",),
 )
@@ -126,6 +126,7 @@ class ReplicationResource(Resource):
         total += yield self.events(request, current_token, limit)
         total += yield self.presence(request, current_token, limit)
         total += yield self.typing(request, current_token, limit)
+        total += yield self.receipts(request, current_token, limit)
         total += self.streams(request, current_token)
         logger.info("Replicated %d rows", total)
 
@@ -195,6 +196,7 @@ class ReplicationResource(Resource):
                 request, "presence", presence_rows,
                 ("stream_id", "user_id", "status")
             )
+
         defer.returnValue(total)
 
     @defer.inlineCallbacks
@@ -212,6 +214,25 @@ class ReplicationResource(Resource):
                 request, "typing", typing_rows,
                 ("stream_id", "room_id", "typing")
             )
+
+        defer.returnValue(total)
+
+    @defer.inlineCallbacks
+    def receipts(self, request, current_token, limit):
+        current_stream_id = current_token.receipts
+
+        request_receipts = parse_integer(request, "receipts")
+
+        total = 0
+        if request_receipts is not None:
+            receipts_rows = yield self.store.get_all_updated_receipts(
+                request_receipts, current_stream_id, limit
+            )
+            total += write_header_and_rows(
+                request, "receipts", receipts_rows,
+                ("stream_id", "room_id", "receipt_type", "user_id", "event_id", "data")
+            )
+
         defer.returnValue(total)
 
     @defer.inlineCallbacks
