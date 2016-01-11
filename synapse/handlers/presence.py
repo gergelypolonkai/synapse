@@ -1162,7 +1162,7 @@ class PresenceHandler(BaseHandler):
                 continue
 
             for user_id in user_ids:
-                rows.append(cached.serial, user_id, '{"presence":"offline"}')
+                rows.append((cached.serial, user_id, '{"presence":"offline"}'))
 
         rows.sort()
 
