@@ -92,8 +92,11 @@ class TagsStore(SQLBaseStore):
             results = []
             for stream_id, user_id, room_id in txn.fetchall():
                 txn.execute(sql, (user_id, room_id))
+                tags = []
                 for tag, content in txn.fetchall():
-                    results.append((stream_id, user_id, room_id, tag, content))
+                    tags.append(json.dumps(tag) + ":" + content)
+                tag_json = "{" + ",".join(tags) + "}"
+                results.append((stream_id, user_id, room_id, tag_json))
 
             return results
 

@@ -267,7 +267,7 @@ class ReplicationResource(Resource):
             )
             total += write_header_and_rows(
                 request, "tag_account_data", tag_rows,
-                ("stream_id", "user_id", "room_id", "tag", "content")
+                ("stream_id", "user_id", "room_id", "tags")
             )
 
         defer.returnValue(total)
