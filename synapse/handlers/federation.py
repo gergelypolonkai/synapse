@@ -245,7 +245,7 @@ class FederationHandler(BaseHandler):
                     yield user_joined_room(self.distributor, user, event.room_id)
 
         if not backfilled and not event.internal_metadata.is_outlier():
-            action_generator = ActionGenerator(self.store)
+            action_generator = ActionGenerator(self.hs)
             yield action_generator.handle_push_actions_for_event(
                 event, self
             )
@@ -1186,7 +1186,13 @@ class FederationHandler(BaseHandler):
 
             try:
                 self.auth.check(e, auth_events=auth_for_e)
-            except AuthError as err:
+            except SynapseError as err:
+                # we may get SynapseErrors here as well as AuthErrors. For
+                # instance, there are a couple of (ancient) events in some
+                # rooms whose senders do not have the correct sigil; these
+                # cause SynapseErrors in auth.check. We don't want to give up
+                # the attempt to federate altogether in such cases.
+
                 logger.warn(
                     "Rejecting %s because %s",
                     e.event_id, err.msg
@@ -1692,7 +1698,7 @@ class FederationHandler(BaseHandler):
             self.auth.check(event, context.current_state)
             yield self._validate_keyserver(event, auth_events=context.current_state)
             member_handler = self.hs.get_handlers().room_member_handler
-            yield member_handler.change_membership(event, context)
+            yield member_handler.send_membership_event(event, context)
         else:
             destinations = set([x.split(":", 1)[-1] for x in (sender, room_id)])
             yield self.replication_layer.forward_third_party_invite(
@@ -1721,7 +1727,7 @@ class FederationHandler(BaseHandler):
         # TODO: Make sure the signatures actually are correct.
         event.signatures.update(returned_invite.signatures)
         member_handler = self.hs.get_handlers().room_member_handler
-        yield member_handler.change_membership(event, context)
+        yield member_handler.send_membership_event(event, context)
 
     @defer.inlineCallbacks
     def add_display_name_to_third_party_invite(self, event_dict, event, context):

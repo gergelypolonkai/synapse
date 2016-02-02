@@ -152,6 +152,12 @@ class AccountDataStore(SQLBaseStore):
 
             return (global_account_data, account_data_by_room)
 
+        changed = self._account_data_stream_cache.has_entity_changed(
+            user_id, int(stream_id)
+        )
+        if not changed:
+            return ({}, {})
+
         return self.runInteraction(
             "get_updated_account_data_for_user", get_updated_account_data_for_user_txn
         )
@@ -182,6 +188,10 @@ class AccountDataStore(SQLBaseStore):
                     "stream_id": next_id,
                     "content": content_json,
                 }
+            )
+            txn.call_after(
+                self._account_data_stream_cache.entity_has_changed,
+                user_id, next_id,
             )
             self._update_max_stream_id(txn, next_id)
 
@@ -217,6 +227,10 @@ class AccountDataStore(SQLBaseStore):
                     "stream_id": next_id,
                     "content": content_json,
                 }
+            )
+            txn.call_after(
+                self._account_data_stream_cache.entity_has_changed,
+                user_id, next_id,
             )
             self._update_max_stream_id(txn, next_id)
 
