@@ -39,6 +39,7 @@ from ._base import SQLBaseStore
 from synapse.util.caches.descriptors import cachedInlineCallbacks
 from synapse.api.constants import EventTypes
 from synapse.types import RoomStreamToken
+from synapse.util.logcontext import preserve_fn
 
 import logging
 
@@ -156,7 +157,8 @@ class StreamStore(SQLBaseStore):
         defer.returnValue(results)
 
     @defer.inlineCallbacks
-    def get_room_events_stream_for_rooms(self, room_ids, from_key, to_key, limit=0):
+    def get_room_events_stream_for_rooms(self, room_ids, from_key, to_key, limit=0,
+                                         order='DESC'):
         from_id = RoomStreamToken.parse_stream_token(from_key).stream
 
         room_ids = yield self._events_stream_cache.get_entities_changed(
@@ -168,19 +170,20 @@ class StreamStore(SQLBaseStore):
 
         results = {}
         room_ids = list(room_ids)
-        for rm_ids in (room_ids[i:i+20] for i in xrange(0, len(room_ids), 20)):
+        for rm_ids in (room_ids[i:i + 20] for i in xrange(0, len(room_ids), 20)):
             res = yield defer.gatherResults([
-                self.get_room_events_stream_for_room(
-                    room_id, from_key, to_key, limit
-                ).addCallback(lambda r, rm: (rm, r), room_id)
-                for room_id in room_ids
+                preserve_fn(self.get_room_events_stream_for_room)(
+                    room_id, from_key, to_key, limit, order=order,
+                )
+                for room_id in rm_ids
             ])
-            results.update(dict(res))
+            results.update(dict(zip(rm_ids, res)))
 
         defer.returnValue(results)
 
     @defer.inlineCallbacks
-    def get_room_events_stream_for_room(self, room_id, from_key, to_key, limit=0):
+    def get_room_events_stream_for_room(self, room_id, from_key, to_key, limit=0,
+                                        order='DESC'):
         if from_key is not None:
             from_id = RoomStreamToken.parse_stream_token(from_key).stream
         else:
@@ -205,8 +208,8 @@ class StreamStore(SQLBaseStore):
                     " room_id = ?"
                     " AND not outlier"
                     " AND stream_ordering > ? AND stream_ordering <= ?"
-                    " ORDER BY stream_ordering DESC LIMIT ?"
-                )
+                    " ORDER BY stream_ordering %s LIMIT ?"
+                ) % (order,)
                 txn.execute(sql, (room_id, from_id, to_id, limit))
             else:
                 sql = (
@@ -214,34 +217,37 @@ class StreamStore(SQLBaseStore):
                     " room_id = ?"
                     " AND not outlier"
                     " AND stream_ordering <= ?"
-                    " ORDER BY stream_ordering DESC LIMIT ?"
-                )
+                    " ORDER BY stream_ordering %s LIMIT ?"
+                ) % (order,)
                 txn.execute(sql, (room_id, to_id, limit))
 
             rows = self.cursor_to_dict(txn)
 
-            ret = self._get_events_txn(
-                txn,
-                [r["event_id"] for r in rows],
-                get_prev_content=True
-            )
+            return rows
 
-            self._set_before_and_after(ret, rows, topo_order=False)
+        rows = yield self.runInteraction("get_room_events_stream_for_room", f)
 
+        ret = yield self._get_events(
+            [r["event_id"] for r in rows],
+            get_prev_content=True
+        )
+
+        self._set_before_and_after(ret, rows, topo_order=False)
+
+        if order.lower() == "desc":
             ret.reverse()
 
-            if rows:
-                key = "s%d" % min(r["stream_ordering"] for r in rows)
-            else:
-                # Assume we didn't get anything because there was nothing to
-                # get.
-                key = from_key
+        if rows:
+            key = "s%d" % min(r["stream_ordering"] for r in rows)
+        else:
+            # Assume we didn't get anything because there was nothing to
+            # get.
+            key = from_key
 
-            return ret, key
-        res = yield self.runInteraction("get_room_events_stream_for_room", f)
-        defer.returnValue(res)
+        defer.returnValue((ret, key))
 
-    def get_room_changes_for_user(self, user_id, from_key, to_key):
+    @defer.inlineCallbacks
+    def get_membership_changes_for_user(self, user_id, from_key, to_key):
         if from_key is not None:
             from_id = RoomStreamToken.parse_stream_token(from_key).stream
         else:
@@ -249,14 +255,14 @@ class StreamStore(SQLBaseStore):
         to_id = RoomStreamToken.parse_stream_token(to_key).stream
 
         if from_key == to_key:
-            return defer.succeed([])
+            defer.returnValue([])
 
         if from_id:
             has_changed = self._membership_stream_cache.has_entity_changed(
                 user_id, int(from_id)
             )
             if not has_changed:
-                return defer.succeed([])
+                defer.returnValue([])
 
         def f(txn):
             if from_id is not None:
@@ -281,17 +287,18 @@ class StreamStore(SQLBaseStore):
                 txn.execute(sql, (user_id, to_id,))
             rows = self.cursor_to_dict(txn)
 
-            ret = self._get_events_txn(
-                txn,
-                [r["event_id"] for r in rows],
-                get_prev_content=True
-            )
+            return rows
 
-            self._set_before_and_after(ret, rows, topo_order=False)
+        rows = yield self.runInteraction("get_membership_changes_for_user", f)
 
-            return ret
+        ret = yield self._get_events(
+            [r["event_id"] for r in rows],
+            get_prev_content=True
+        )
 
-        return self.runInteraction("get_room_changes_for_user", f)
+        self._set_before_and_after(ret, rows, topo_order=False)
+
+        defer.returnValue(ret)
 
     def get_room_events_stream(
         self,
@@ -561,6 +568,7 @@ class StreamStore(SQLBaseStore):
             table="events",
             keyvalues={"event_id": event_id},
             retcols=("stream_ordering", "topological_ordering"),
+            desc="get_topological_token_for_event",
         ).addCallback(lambda row: "t%d-%d" % (
             row["topological_ordering"], row["stream_ordering"],)
         )
