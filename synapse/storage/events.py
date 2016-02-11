@@ -1065,16 +1065,12 @@ class EventsStore(SQLBaseStore):
 
         defer.returnValue(result)
 
-    @defer.inlineCallbacks
     def get_current_backfill_token(self):
         """The current minimum token that backfilled events have reached"""
 
-        if not self.min_token_deferred.called:
-            yield self.min_token_deferred
-
         # TODO: Fix race with the persit_event txn by using one of the
         # stream id managers
-        defer.returnValue(-self.min_token)
+        return -self.min_stream_token
 
     def get_all_new_events(self, last_backfill_id, last_forward_id,
                            current_backfill_id, current_forward_id, limit):
