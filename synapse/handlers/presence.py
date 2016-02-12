@@ -1144,7 +1144,8 @@ class PresenceHandler(BaseHandler):
         )
 
     def get_all_presence_updates(self, last_id, current_id, limit):
-        """Return all the presence updates happened since the last id"""
+        """Return the latest presence update for each user that happened since
+        the last id"""
         # TODO: Respect the limit.
         # TODO: Find a way to do this without scanning the entire presence map.
         rows = []
@@ -1158,6 +1159,8 @@ class PresenceHandler(BaseHandler):
 
         for serial, user_ids in self._remote_offline_serials:
             if serial <= last_id:
+                # The _remote_offline_serials are in reverse serial order
+                # so we can terminate the loop here.
                 break
 
             if serial > current_id:
