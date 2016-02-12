@@ -2,13 +2,15 @@ import requests
 import collections
 import sys
 import time
+import json
 
-Entry = collections.namedtuple("Entry", "name stream_id rows")
+Entry = collections.namedtuple("Entry", "name position rows")
 
 ROW_TYPES = {}
 
 
 def row_type_for_columns(name, column_names):
+    column_names = tuple(column_names)
     row_type = ROW_TYPES.get((name, column_names))
     if row_type is None:
         row_type = collections.namedtuple(name, column_names)
@@ -17,21 +19,13 @@ def row_type_for_columns(name, column_names):
 
 
 def parse_response(content):
-    lines = content.split(b'\xff')
-    index = 0
+    streams = json.loads(content)
     result = {}
-    while lines[index]:
-        header = lines[index].split(b'\xfe')
-        name, stream_id, rows, cols = header[:4]
-        rows, cols = int(rows), int(cols)
-        column_names = tuple(header[4 : 4 + cols])
-        row_type = row_type_for_columns(name, column_names)
-        data = [
-            row_type(*line.split(b'\xfe')[:cols])
-            for line in lines[index + 1 : index + 1 + rows]
-        ]
-        result[name] = Entry(name, stream_id, data)
-        index += 1 + rows
+    for name, value in streams.items():
+        row_type = row_type_for_columns(name, value["field_names"])
+        position = value["position"]
+        rows = [row_type(*row) for row in value["rows"]]
+        result[name] = Entry(name, position, rows)
     return result
 
 
@@ -50,10 +44,10 @@ def main():
     while not streams:
         try:
             streams = {
-                row.name: row.stream_id
+                row.name: row.position
                 for row in replicate(server, {"streams":"-1"})["streams"].rows
             }
-        except:
+        except requests.exceptions.ConnectionError as e:
             time.sleep(0.1)
 
     while True:
@@ -65,9 +59,8 @@ def main():
         for update in results.values():
             for row in update.rows:
                 sys.stdout.write(repr(row) + "\n")
-            streams[update.name] = update.stream_id
+            streams[update.name] = update.position
 
-        time.sleep(0.1)
 
 
 if __name__=='__main__':
