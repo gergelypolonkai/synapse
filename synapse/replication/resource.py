@@ -73,12 +73,12 @@ class _ReplicationToken(collections.namedtuple("_ReplicationToken", (
 
     def __new__(cls, *args):
         if len(args) == 1:
-            return cls(*(int(value) for value in args[0].split("/")))
+            return cls(*(int(value) for value in args[0].split("_")))
         else:
             return super(_ReplicationToken, cls).__new__(cls, *args)
 
     def __str__(self):
-        return "/".join(str(value) for value in self)
+        return "_".join(str(value) for value in self)
 
 
 STREAM_NAMES = (
@@ -200,7 +200,7 @@ class ReplicationResource(Resource):
                 items = zip(
                     STREAM_NAMES,
                     current_token,
-                    map(int, request_token.split("_"))
+                    _ReplicationToken(request_token)
                 )
                 for names, current_id, last_id in items:
                     if last_id < current_id:
@@ -209,7 +209,7 @@ class ReplicationResource(Resource):
             if streams:
                 writer.write_header_and_rows(
                     "streams", streams, ("name", "position"),
-                    position="_".join(str(x) for x in current_token)
+                    position=str(current_token)
                 )
 
     @defer.inlineCallbacks
