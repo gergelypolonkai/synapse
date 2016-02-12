@@ -40,12 +40,6 @@ class _Writer(object):
         self.sep = b"{"
         self.total = 0
 
-    def write_row(self, row):
-        row_bytes = b",".join(_encode(item) for item in row)
-        self.request.write(self.sep)
-        self.request.write(row_bytes)
-        self.sep = "]\n,["
-
     def write_header_and_rows(self, name, rows, fields, position=None):
         if not rows:
             return
@@ -53,24 +47,22 @@ class _Writer(object):
         if position is None:
             position = rows[-1][0]
 
-        header = _encode({
+        self.request.write(self.sep + _encode(name) + ":")
+        self.request.write(_encode({
             "position": str(position),
             "field_names": fields,
-        })
+            "rows": rows,
+        }))
 
-        # Strip the closing "}" byte and append an extra key to the dict.
-        self.sep += _encode(name) + ":" + header[:-1] + ",\"rows\":\n[["
-
-        for row in rows:
-            self.write_row(row)
         self.total += len(rows)
-        self.sep = b"]\n]},"
+
+        self.sep = b","
 
     def finish(self):
-        if self.sep == b"{}":
+        if self.sep == b"{":
             self.request.write(b"{}")
         else:
-            self.request.write(b"]\n]}}")
+            self.request.write(b"}")
         self.request.finish()
 
 
