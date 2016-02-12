@@ -14,7 +14,7 @@
 # limitations under the License.
 
 from synapse.http.servlet import parse_integer, parse_string
-from synapse.http.server import request_handler
+from synapse.http.server import request_handler, finish_request
 
 from twisted.web.resource import Resource
 from twisted.web.server import NOT_DONE_YET
@@ -63,7 +63,7 @@ class _Writer(object):
             self.request.write(b"{}")
         else:
             self.request.write(b"}")
-        self.request.finish()
+        finish_request(self.request)
 
 
 class _ReplicationToken(collections.namedtuple("_ReplicationToken", (
