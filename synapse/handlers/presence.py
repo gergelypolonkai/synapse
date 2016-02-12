@@ -1143,10 +1143,9 @@ class PresenceHandler(BaseHandler):
             content={"push": [user_state, ], }
         )
 
-    def get_all_presence_updates(self, last_id, current_id, limit):
+    def get_all_presence_updates(self, last_id, current_id):
         """Return the latest presence update for each user that happened since
         the last id"""
-        # TODO: Respect the limit.
         # TODO: Find a way to do this without scanning the entire presence map.
         rows = []
         for user, cached in self._user_cachemap.items():

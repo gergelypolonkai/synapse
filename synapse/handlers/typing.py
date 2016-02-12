@@ -220,8 +220,7 @@ class TypingNotificationHandler(BaseHandler):
                 "typing_key", self._latest_room_serial, rooms=[room_id]
             )
 
-    def get_all_typing_updates(self, last_id, current_id, limit):
-        # TODO: Respect the limit
+    def get_all_typing_updates(self, last_id, current_id):
         # TODO: Work out a way to do this without scanning the entire state.
         rows = []
         for room_id, serial in self._room_serials.items():

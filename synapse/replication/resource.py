@@ -175,8 +175,8 @@ class ReplicationResource(Resource):
 
             yield self.account_data(writer, current_token, limit)
             yield self.events(writer, current_token, limit)
-            yield self.presence(writer, current_token, limit)
-            yield self.typing(writer, current_token, limit)
+            yield self.presence(writer, current_token)  # TODO: implement limit
+            yield self.typing(writer, current_token)  # TODO: implement limit
             yield self.receipts(writer, current_token, limit)
             self.streams(writer, current_token)
 
