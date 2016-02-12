@@ -30,36 +30,47 @@ logger = logging.getLogger(__name__)
 REPLICATION_PREFIX = "/_synapse/replication"
 
 
+def _encode(item):
+    return json.dumps(item, ensure_ascii=False)
+
+
 class _Writer(object):
     def __init__(self, request):
         self.request = request
-        self.sep = b"[["
+        self.sep = b"{"
         self.total = 0
 
     def write_row(self, row):
-        row_bytes = b",".join(json.dumps(item) for item in row)
+        row_bytes = b",".join(_encode(item) for item in row)
         self.request.write(self.sep)
         self.request.write(row_bytes)
-        self.sep = b"]\n,["
+        self.sep = "]\n,["
 
-    def write_header(self, name, stream_id, count, fields):
-        self.write_row((name, stream_id, count, len(fields)) + fields)
-
-    def write_header_and_rows(self, name, rows, fields, stream_id=None):
+    def write_header_and_rows(self, name, rows, fields, position=None):
         if not rows:
-            return 0
-        if stream_id is None:
-            stream_id = rows[-1][0]
-        self.write_header(name, stream_id, len(rows), fields)
+            return
+
+        if position is None:
+            position = rows[-1][0]
+
+        header = _encode({
+            "position": str(position),
+            "field_names": fields,
+        })
+
+        # Strip the closing "}" byte and append an extra key to the dict.
+        self.sep += _encode(name) + ":" + header[:-1] + ",\"rows\":\n[["
+
         for row in rows:
             self.write_row(row)
         self.total += len(rows)
+        self.sep = b"]\n]},"
 
     def finish(self):
-        if self.sep == b"[[":
-            self.request.write(b"[]")
+        if self.sep == b"{}":
+            self.request.write(b"{}")
         else:
-            self.request.write(b"]\n]")
+            self.request.write(b"]\n]}}")
         self.request.finish()
 
 
@@ -89,6 +100,43 @@ STREAM_NAMES = (
 
 
 class ReplicationResource(Resource):
+    """
+    HTTP endpoint for extracting data from synapse.
+
+    The streams of data returned by the endpoint are controlled by the
+    parameters given to the API. To return a given stream pass a query
+    parameter with a position in the stream to return data from or the
+    special value "-1" to return data from the start of the stream.
+
+    If there is no data for any of the supplied streams after the given
+    position then the request will block until there is data for one
+    of the streams. This allows clients to long-poll this API.
+
+    The possible streams are:
+
+    * "streams": A special stream returing the positions of other streams.
+    * "events": The new events seen on the server.
+    * "presence": Presence updates.
+    * "typing": Typing updates.
+    * "receipts": Receipt updates.
+    * "user_account_data": Top-level per user account data.
+    * "room_account_data: Per room per user account data.
+    * "tag_account_data": Per room per user tags.
+    * "backfill": Old events that have been backfilled from other servers.
+
+    The API takes two additional query parameters:
+
+    * "timeout": How long to wait before returning an empty response.
+    * "limit": The maximum number of rows to return for the selected streams.
+
+    The response is a JSON object with keys for each stream with updates. Under
+    each key is a JSON object with:
+
+    * "postion": The current position of the stream.
+    * "field_names": The names of the fields in each row.
+    * "rows": The updates as an array of arrays.
+    """
+
     isLeaf = True
 
     def __init__(self, hs):
@@ -154,8 +202,8 @@ class ReplicationResource(Resource):
 
         if request_token is not None:
             if request_token == "-1":
-                for names, stream_id in zip(STREAM_NAMES, current_token):
-                    streams.extend((name, stream_id) for name in names)
+                for names, position in zip(STREAM_NAMES, current_token):
+                    streams.extend((name, position) for name in names)
             else:
                 items = zip(
                     STREAM_NAMES,
@@ -168,8 +216,8 @@ class ReplicationResource(Resource):
 
             if streams:
                 writer.write_header_and_rows(
-                    "streams", streams, ("name", "stream_id"),
-                    stream_id="_".join(str(x) for x in current_token)
+                    "streams", streams, ("name", "position"),
+                    position="_".join(str(x) for x in current_token)
                 )
 
     @defer.inlineCallbacks
@@ -188,57 +236,57 @@ class ReplicationResource(Resource):
                 limit
             )
             writer.write_header_and_rows(
-                "events", events_rows, ("stream_id", "internal", "json")
+                "events", events_rows, ("position", "internal", "json")
             )
             writer.write_header_and_rows(
-                "backfill", backfill_rows, ("stream_id", "internal", "json")
+                "backfill", backfill_rows, ("position", "internal", "json")
             )
 
     @defer.inlineCallbacks
     def presence(self, writer, current_token, limit):
-        current_stream_id = current_token.presence
+        current_position = current_token.presence
 
         request_presence = parse_integer(writer.request, "presence")
 
         if request_presence is not None:
             presence_rows = yield self.presence_handler.get_all_presence_updates(
-                request_presence, current_stream_id, limit
+                request_presence, current_position, limit
             )
             writer.write_header_and_rows(
-                "presence", presence_rows, ("stream_id", "user_id", "status")
+                "presence", presence_rows, ("position", "user_id", "status")
             )
 
     @defer.inlineCallbacks
     def typing(self, writer, current_token, limit):
-        current_stream_id = current_token.presence
+        current_position = current_token.presence
 
         request_typing = parse_integer(writer.request, "typing")
 
         if request_typing is not None:
             typing_rows = yield self.typing_handler.get_all_typing_updates(
-                request_typing, current_stream_id, limit
+                request_typing, current_position, limit
             )
             writer.write_header_and_rows("typing", typing_rows, (
-                "stream_id", "room_id", "typing"
+                "position", "room_id", "typing"
             ))
 
     @defer.inlineCallbacks
     def receipts(self, writer, current_token, limit):
-        current_stream_id = current_token.receipts
+        current_position = current_token.receipts
 
         request_receipts = parse_integer(writer.request, "receipts")
 
         if request_receipts is not None:
             receipts_rows = yield self.store.get_all_updated_receipts(
-                request_receipts, current_stream_id, limit
+                request_receipts, current_position, limit
             )
             writer.write_header_and_rows("receipts", receipts_rows, (
-                "stream_id", "room_id", "receipt_type", "user_id", "event_id", "data"
+                "position", "room_id", "receipt_type", "user_id", "event_id", "data"
             ))
 
     @defer.inlineCallbacks
     def account_data(self, writer, current_token, limit):
-        current_stream_id = current_token.account_data
+        current_position = current_token.account_data
 
         user_account_data = parse_integer(writer.request, "user_account_data")
         room_account_data = parse_integer(writer.request, "room_account_data")
@@ -246,23 +294,23 @@ class ReplicationResource(Resource):
 
         if user_account_data is not None or room_account_data is not None:
             if user_account_data is None:
-                user_account_data = current_stream_id
+                user_account_data = current_position
             if room_account_data is None:
-                room_account_data = current_stream_id
+                room_account_data = current_position
             user_rows, room_rows = yield self.store.get_all_updated_account_data(
-                user_account_data, room_account_data, current_stream_id, limit
+                user_account_data, room_account_data, current_position, limit
             )
             writer.write_header_and_rows("user_account_data", user_rows, (
-                "stream_id", "user_id", "type", "content"
+                "position", "user_id", "type", "content"
             ))
             writer.write_header_and_rows("room_account_data", room_rows, (
-                "stream_id", "user_id", "room_id", "type", "content"
+                "position", "user_id", "room_id", "type", "content"
             ))
 
         if tag_account_data is not None:
             tag_rows = yield self.store.get_all_updated_tags(
-                tag_account_data, current_stream_id, limit
+                tag_account_data, current_position, limit
             )
             writer.write_header_and_rows("tag_account_data", tag_rows, (
-                "stream_id", "user_id", "room_id", "tags"
+                "position", "user_id", "room_id", "tags"
             ))
