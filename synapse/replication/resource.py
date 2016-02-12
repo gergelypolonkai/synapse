@@ -99,6 +99,7 @@ class ReplicationResource(Resource):
         self.sources = hs.get_event_sources()
         self.presence_handler = hs.get_handlers().presence_handler
         self.typing_handler = hs.get_handlers().typing_notification_handler
+        self.notifier = hs.notifier
 
     def render_GET(self, request):
         self._async_render_GET(request)
@@ -121,23 +122,28 @@ class ReplicationResource(Resource):
     @request_handler
     @defer.inlineCallbacks
     def _async_render_GET(self, request):
-
-        current_token = yield self.current_replication_token()
-
-        logger.info("Replicating up to %r", current_token)
-
         limit = parse_integer(request, "limit", 100)
+        timeout = parse_integer(request, "timeout", 10 * 1000)
 
         request.setHeader(b"Content-Type", b"application/json")
         writer = _Writer(request)
-        yield self.account_data(writer, current_token, limit)
-        yield self.events(writer, current_token, limit)
-        yield self.presence(writer, current_token, limit)
-        yield self.typing(writer, current_token, limit)
-        yield self.receipts(writer, current_token, limit)
-        self.streams(writer, current_token)
 
-        logger.info("Replicated %d rows", writer.total)
+        @defer.inlineCallbacks
+        def replicate():
+            current_token = yield self.current_replication_token()
+            logger.info("Replicating up to %r", current_token)
+
+            yield self.account_data(writer, current_token, limit)
+            yield self.events(writer, current_token, limit)
+            yield self.presence(writer, current_token, limit)
+            yield self.typing(writer, current_token, limit)
+            yield self.receipts(writer, current_token, limit)
+            self.streams(writer, current_token)
+
+            logger.info("Replicated %d rows", writer.total)
+            defer.returnValue(writer.total)
+
+        yield self.notifier.wait_for_replication(replicate, timeout)
 
         writer.finish()
 
