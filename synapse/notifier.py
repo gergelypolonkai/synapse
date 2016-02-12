@@ -509,8 +509,7 @@ class Notifier(object):
         listener = _NotificationListener(None)
 
         def timed_out():
-            if listener.deferred:
-                listener.deferred.cancel()
+            listener.deferred.cancel()
 
         timer = self.clock.call_later(timeout / 1000., timed_out)
         while True:
