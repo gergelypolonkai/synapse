@@ -23,7 +23,7 @@ from synapse.util.logutils import log_function
 from synapse.types import UserID
 import synapse.metrics
 
-from canonicaljson import encode_canonical_json
+import ujson as json
 
 from ._base import BaseHandler
 
@@ -1153,7 +1153,8 @@ class PresenceHandler(BaseHandler):
                 rows.append((
                     cached.serial,
                     user.to_string(),
-                    encode_canonical_json(cached.state),
+                    # Encode as JSON so that we return only primitive types
+                    json.dumps(cached.state, ensure_ascii=False),
                 ))
 
         for serial, user_ids in self._remote_offline_serials:
