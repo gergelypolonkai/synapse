@@ -29,58 +29,6 @@ logger = logging.getLogger(__name__)
 
 REPLICATION_PREFIX = "/_synapse/replication"
 
-
-def _encode(item):
-    return json.dumps(item, ensure_ascii=False)
-
-
-class _Writer(object):
-    def __init__(self, request):
-        self.request = request
-        self.sep = b"{"
-        self.total = 0
-
-    def write_header_and_rows(self, name, rows, fields, position=None):
-        if not rows:
-            return
-
-        if position is None:
-            position = rows[-1][0]
-
-        self.request.write(self.sep + _encode(name) + ":")
-        self.request.write(_encode({
-            "position": str(position),
-            "field_names": fields,
-            "rows": rows,
-        }))
-
-        self.total += len(rows)
-
-        self.sep = b","
-
-    def finish(self):
-        if self.sep == b"{":
-            self.request.write(b"{}")
-        else:
-            self.request.write(b"}")
-        finish_request(self.request)
-
-
-class _ReplicationToken(collections.namedtuple("_ReplicationToken", (
-    "events", "presence", "typing", "receipts", "account_data", "backfill",
-))):
-    __slots__ = []
-
-    def __new__(cls, *args):
-        if len(args) == 1:
-            return cls(*(int(value) for value in args[0].split("_")))
-        else:
-            return super(_ReplicationToken, cls).__new__(cls, *args)
-
-    def __str__(self):
-        return "_".join(str(value) for value in self)
-
-
 STREAM_NAMES = (
     ("events",),
     ("presence",),
@@ -306,3 +254,51 @@ class ReplicationResource(Resource):
             writer.write_header_and_rows("tag_account_data", tag_rows, (
                 "position", "user_id", "room_id", "tags"
             ))
+
+
+class _Writer(object):
+    """Writes the streams as a JSON object as the response to the request"""
+    def __init__(self, request):
+        self.request = request
+        self.sep = b"{"
+        self.total = 0
+
+    def write_header_and_rows(self, name, rows, fields, position=None):
+        if not rows:
+            return
+
+        if position is None:
+            position = rows[-1][0]
+
+        self.request.write(self.sep + json.dumps(name, ensure_ascii=False) + ":")
+        self.request.write(json.dumps({
+            "position": str(position),
+            "field_names": fields,
+            "rows": rows,
+        }, ensure_ascii=False))
+
+        self.total += len(rows)
+
+        self.sep = b","
+
+    def finish(self):
+        if self.sep == b"{":
+            self.request.write(b"{}")
+        else:
+            self.request.write(b"}")
+        finish_request(self.request)
+
+
+class _ReplicationToken(collections.namedtuple("_ReplicationToken", (
+    "events", "presence", "typing", "receipts", "account_data", "backfill",
+))):
+    __slots__ = []
+
+    def __new__(cls, *args):
+        if len(args) == 1:
+            return cls(*(int(value) for value in args[0].split("_")))
+        else:
+            return super(_ReplicationToken, cls).__new__(cls, *args)
+
+    def __str__(self):
+        return "_".join(str(value) for value in self)
