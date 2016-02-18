@@ -58,6 +58,7 @@ class TagsStore(SQLBaseStore):
 
         return deferred
 
+    @defer.inlineCallbacks
     def get_all_updated_tags(self, last_id, current_id, limit):
         """Get all the client tags that have changed on the server
         Args:
@@ -75,14 +76,20 @@ class TagsStore(SQLBaseStore):
                 " ORDER BY stream_id ASC LIMIT ?"
             )
             txn.execute(sql, (last_id, current_id, limit))
+            return txn.fetchall()
 
+        tag_ids = yield self.runInteraction(
+            "get_all_updated_tags", get_all_updated_tags_txn
+        )
+
+        def get_tag_content(txn, tag_ids):
             sql = (
                 "SELECT tag, content"
                 " FROM room_tags"
                 " WHERE user_id=? AND room_id=?"
             )
             results = []
-            for stream_id, user_id, room_id in txn.fetchall():
+            for stream_id, user_id, room_id in tag_ids:
                 txn.execute(sql, (user_id, room_id))
                 tags = []
                 for tag, content in txn.fetchall():
@@ -92,9 +99,17 @@ class TagsStore(SQLBaseStore):
 
             return results
 
-        return self.runInteraction(
-            "get_all_updated_tags_txn", get_all_updated_tags_txn
-        )
+        batch_size = 50
+        results = []
+        for i in xrange(0, len(tag_ids), batch_size):
+            tags = yield self.runInteraction(
+                "get_all_updated_tag_content",
+                get_tag_content,
+                tag_ids[i:i + batch_size],
+            )
+            results.extend(tags)
+
+        defer.returnValue(results)
 
     @defer.inlineCallbacks
     def get_updated_tags(self, user_id, stream_id):
