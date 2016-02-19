@@ -183,28 +183,30 @@ class ReplicationResource(Resource):
             )
 
     @defer.inlineCallbacks
-    def presence(self, writer, current_token, limit):
+    def presence(self, writer, current_token):
         current_position = current_token.presence
 
         request_presence = parse_integer(writer.request, "presence")
 
         if request_presence is not None:
             presence_rows = yield self.presence_handler.get_all_presence_updates(
-                request_presence, current_position, limit
+                request_presence, current_position
             )
-            writer.write_header_and_rows(
-                "presence", presence_rows, ("position", "user_id", "status")
-            )
+            writer.write_header_and_rows("presence", presence_rows, (
+                "position", "user_id", "state", "last_active_ts",
+                "last_federation_update_ts", "last_user_sync_ts",
+                "status_msg", "currently_active",
+            ))
 
     @defer.inlineCallbacks
-    def typing(self, writer, current_token, limit):
+    def typing(self, writer, current_token):
         current_position = current_token.presence
 
         request_typing = parse_integer(writer.request, "typing")
 
         if request_typing is not None:
             typing_rows = yield self.typing_handler.get_all_typing_updates(
-                request_typing, current_position, limit
+                request_typing, current_position
             )
             writer.write_header_and_rows("typing", typing_rows, (
                 "position", "room_id", "typing"
