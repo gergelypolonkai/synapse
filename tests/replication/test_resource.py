@@ -35,35 +35,118 @@ class ReplicationResourceCase(unittest.TestCase):
                 "send_message",
             ]),
         )
+        self.user = UserID.from_string("@seeing:red")
 
         self.hs.get_ratelimiter().send_message.return_value = (True, 0)
 
         self.resource = ReplicationResource(self.hs)
 
-    @unittest.DEBUG
     @defer.inlineCallbacks
     def test_streams(self):
+        # Passing "-1" returns the current stream positions
         code, body = yield self.get(streams="-1")
         self.assertEquals(code, 200)
         self.assertEquals(body["streams"]["field_names"], ["name", "position"])
-
-    @defer.inlineCallbacks
-    def test_events_timeout(self):
-        get = self.get(events="-1", timeout="0")
+        position = body["streams"]["position"]
+        # Passing the current position returns an empty response after the
+        # timeout
+        get = self.get(streams=str(position), timeout="0")
         self.hs.clock.advance_time_msec(1)
         code, body = yield get
+        self.assertEquals(code, 200)
         self.assertEquals(body, {})
 
     @defer.inlineCallbacks
     def test_events(self):
         get = self.get(events="-1", timeout="0")
         yield self.hs.get_handlers().room_creation_handler.create_room(
-            Requester(UserID.from_string("@seeing:red"), "", False), {}
+            Requester(self.user, "", False), {}
         )
         code, body = yield get
+        self.assertEquals(code, 200)
         self.assertEquals(body["events"]["field_names"], [
             "position", "internal", "json"
         ])
+
+    @defer.inlineCallbacks
+    def test_presence(self):
+        get = self.get(presence="-1")
+        yield self.hs.get_handlers().presence_handler.set_state(
+            self.user, {"presence": "online"}
+        )
+        code, body = yield get
+        self.assertEquals(code, 200)
+        self.assertEquals(body["presence"]["field_names"], [
+            "position", "user_id", "state", "last_active_ts",
+            "last_federation_update_ts", "last_user_sync_ts",
+            "status_msg", "currently_active",
+        ])
+
+    @defer.inlineCallbacks
+    def test_typing(self):
+        room_id = yield self.create_room()
+        get = self.get(typing="-1")
+        yield self.hs.get_handlers().typing_notification_handler.started_typing(
+            self.user, self.user, room_id, timeout=2
+        )
+        code, body = yield get
+        self.assertEquals(code, 200)
+        self.assertEquals(body["typing"]["field_names"], [
+            "position", "room_id", "typing"
+        ])
+
+    @defer.inlineCallbacks
+    def test_receipts(self):
+        room_id = yield self.create_room()
+        event_id = yield self.send_text_message(room_id, "Hello, World")
+        get = self.get(receipts="-1")
+        yield self.hs.get_handlers().receipts_handler.received_client_receipt(
+            room_id, "m.read", self.user.to_string(), event_id
+        )
+        code, body = yield get
+        self.assertEquals(code, 200)
+        self.assertEquals(body["receipts"]["field_names"], [
+            "position", "room_id", "receipt_type", "user_id", "event_id", "data"
+        ])
+
+    def _test_timeout(stream):
+        """Check that a request for the given stream timesout"""
+        @defer.inlineCallbacks
+        def test_timeout(self):
+            get = self.get(**{stream: "-1", "timeout": "0"})
+            self.hs.clock.advance_time_msec(1)
+            code, body = yield get
+            self.assertEquals(code, 200)
+            self.assertEquals(body, {})
+        test_timeout.__name__ = "test_timeout_%s" % (stream)
+        return test_timeout
+
+    test_timeout_events = _test_timeout("events")
+    test_timeout_presence = _test_timeout("presence")
+    test_timeout_typing = _test_timeout("typing")
+    test_timeout_receipts = _test_timeout("receipts")
+    test_timeout_user_account_data = _test_timeout("user_account_data")
+    test_timeout_room_account_data = _test_timeout("room_account_data")
+    test_timeout_tag_account_data = _test_timeout("tag_account_data")
+    test_timeout_backfill = _test_timeout("backfill")
+
+    @defer.inlineCallbacks
+    def send_text_message(self, room_id, message):
+        handler = self.hs.get_handlers().message_handler
+        event = yield handler.create_and_send_nonmember_event({
+            "type": "m.room.message",
+            "content": {"body": "message", "msgtype": "m.text"},
+            "room_id": room_id,
+            "sender": self.user.to_string(),
+        })
+        defer.returnValue(event.event_id)
+
+    @defer.inlineCallbacks
+    def create_room(self):
+        result = yield self.hs.get_handlers().room_creation_handler.create_room(
+            Requester(self.user, "", False), {}
+        )
+        defer.returnValue(result["room_id"])
 
     @defer.inlineCallbacks
     def get(self, **params):
