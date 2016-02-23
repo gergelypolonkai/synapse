@@ -75,6 +75,26 @@ class ReplicationResource(Resource):
     * "postion": The current position of the stream.
     * "field_names": The names of the fields in each row.
     * "rows": The updates as an array of arrays.
+
+    There are a number of ways this API could be used:
+
+    1) To replicate the contents of the backing database to another database.
+    2) To be notified when the contents of a shared backing database changes.
+    3) To "tail" the activity happening on a server for debugging.
+
+    In the first case the client would track all of the streams and store it's
+    own copy of the data.
+
+    In the second case the client might theoretically just be able to follow
+    the "streams" stream to track where the other streams are. However in
+    practise it will probably need to get the contents of the streams in
+    order to expire the any in-memory caches. Whether it gets the contents
+    of the streams from this replication API or directly from the backing
+    store is a matter of taste.
+
+    In the third case the client would use the "streams" stream to find what
+    streams are available and their current positions. Then it can start
+    long-polling this replication API for new data on those streams.
     """
 
     isLeaf = True
