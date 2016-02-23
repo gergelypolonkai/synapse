@@ -1086,8 +1086,11 @@ class EventsStore(SQLBaseStore):
                 " ORDER BY e.stream_ordering ASC"
                 " LIMIT ?"
             )
-            txn.execute(sql, (last_forward_id, current_forward_id, limit))
-            new_forward_events = txn.fetchall()
+            if last_forward_id != current_forward_id:
+                txn.execute(sql, (last_forward_id, current_forward_id, limit))
+                new_forward_events = txn.fetchall()
+            else:
+                new_forward_events = []
 
             sql = (
                 "SELECT -e.stream_ordering, ej.internal_metadata, ej.json"
@@ -1098,8 +1101,11 @@ class EventsStore(SQLBaseStore):
                 " ORDER BY e.stream_ordering DESC"
                 " LIMIT ?"
             )
-            txn.execute(sql, (-last_backfill_id, -current_backfill_id, limit))
-            new_backfill_events = txn.fetchall()
+            if last_backfill_id != current_backfill_id:
+                txn.execute(sql, (-last_backfill_id, -current_backfill_id, limit))
+                new_backfill_events = txn.fetchall()
+            else:
+                new_backfill_events = []
 
             return (new_forward_events, new_backfill_events)
         return self.runInteraction("get_all_new_events", get_all_new_events_txn)
