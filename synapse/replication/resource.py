@@ -261,8 +261,8 @@ class ReplicationResource(Resource):
 class _Writer(object):
     """Writes the streams as a JSON object as the response to the request"""
     def __init__(self, request):
+        self.streams = {}
         self.request = request
-        self.sep = b"{"
         self.total = 0
 
     def write_header_and_rows(self, name, rows, fields, position=None):
@@ -272,22 +272,16 @@ class _Writer(object):
         if position is None:
             position = rows[-1][0]
 
-        self.request.write(self.sep + json.dumps(name, ensure_ascii=False) + ":")
-        self.request.write(json.dumps({
+        self.streams[name] = {
             "position": str(position),
             "field_names": fields,
             "rows": rows,
-        }, ensure_ascii=False))
+        }
 
         self.total += len(rows)
 
-        self.sep = b","
-
     def finish(self):
-        if self.sep == b"{":
-            self.request.write(b"{}")
-        else:
-            self.request.write(b"}")
+        self.request.write(json.dumps(self.streams, ensure_ascii=False))
         finish_request(self.request)
 
 
