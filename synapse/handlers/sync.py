@@ -121,7 +121,11 @@ class SyncResult(collections.namedtuple("SyncResult", [
         events.
         """
         return bool(
-            self.presence or self.joined or self.invited or self.archived
+            self.presence or
+            self.joined or
+            self.invited or
+            self.archived or
+            self.account_data
         )
 
 
@@ -645,7 +649,6 @@ class SyncHandler(BaseHandler):
                 recents = yield self._filter_events_for_client(
                     sync_config.user.to_string(),
                     recents,
-                    is_peeking=sync_config.is_guest,
                 )
             else:
                 recents = []
@@ -667,7 +670,6 @@ class SyncHandler(BaseHandler):
                 loaded_recents = yield self._filter_events_for_client(
                     sync_config.user.to_string(),
                     loaded_recents,
-                    is_peeking=sync_config.is_guest,
                 )
                 loaded_recents.extend(recents)
                 recents = loaded_recents

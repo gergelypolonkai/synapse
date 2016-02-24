@@ -228,6 +228,13 @@ class JoinRoomAliasServlet(ClientV1RestServlet):
             allow_guest=True,
         )
 
+        try:
+            content = _parse_json(request)
+        except:
+            # Turns out we used to ignore the body entirely, and some clients
+            # cheekily send invalid bodies.
+            content = {}
+
         if RoomID.is_valid(room_identifier):
             room_id = room_identifier
             remote_room_hosts = None
@@ -248,6 +255,7 @@ class JoinRoomAliasServlet(ClientV1RestServlet):
             action="join",
             txn_id=txn_id,
             remote_room_hosts=remote_room_hosts,
+            third_party_signed=content.get("third_party_signed", None),
         )
 
         defer.returnValue((200, {"room_id": room_id}))
@@ -424,7 +432,12 @@ class RoomMembershipRestServlet(ClientV1RestServlet):
         }:
             raise AuthError(403, "Guest access not allowed")
 
-        content = _parse_json(request)
+        try:
+            content = _parse_json(request)
+        except:
+            # Turns out we used to ignore the body entirely, and some clients
+            # cheekily send invalid bodies.
+            content = {}
 
         if membership_action == "invite" and self._has_3pid_invite_keys(content):
             yield self.handlers.room_member_handler.do_3pid_invite(
@@ -451,6 +464,7 @@ class RoomMembershipRestServlet(ClientV1RestServlet):
             room_id=room_id,
             action=membership_action,
             txn_id=txn_id,
+            third_party_signed=content.get("third_party_signed", None),
         )
 
         defer.returnValue((200, {}))
