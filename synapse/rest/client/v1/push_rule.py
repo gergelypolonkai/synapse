@@ -55,6 +55,10 @@ class PushRuleRestServlet(ClientV1RestServlet):
             yield self.set_rule_attr(requester.user.to_string(), spec, content)
             defer.returnValue((200, {}))
 
+        if spec['rule_id'].startswith('.'):
+            # Rule ids starting with '.' are reserved for server default rules.
+            raise SynapseError(400, "cannot add new rule_ids that start with '.'")
+
         try:
             (conditions, actions) = _rule_tuple_from_request_object(
                 spec['template'],
@@ -197,6 +201,14 @@ class PushRuleRestServlet(ClientV1RestServlet):
             return self.hs.get_datastore().set_push_rule_enabled(
                 user_id, namespaced_rule_id, val
             )
+        elif spec['attr'] == 'actions':
+            actions = val.get('actions')
+            _check_actions(actions)
+            namespaced_rule_id = _namespaced_rule_id_from_spec(spec)
+            is_default_rule = spec['rule_id'].startswith('.')
+            return self.hs.get_datastore().set_push_rule_actions(
+                user_id, namespaced_rule_id, actions, is_default_rule
+            )
         else:
             raise UnrecognizedRequestError()
 
@@ -274,6 +286,15 @@ def _rule_tuple_from_request_object(rule_template, rule_id, req_obj):
         raise InvalidRuleException("No actions found")
     actions = req_obj['actions']
 
+    _check_actions(actions)
+
+    return conditions, actions
+
+
+def _check_actions(actions):
+    if not isinstance(actions, list):
+        raise InvalidRuleException("No actions found")
+
     for a in actions:
         if a in ['notify', 'dont_notify', 'coalesce']:
             pass
@@ -281,8 +302,6 @@ def _rule_tuple_from_request_object(rule_template, rule_id, req_obj):
             pass
         else:
             raise InvalidRuleException("Unrecognised action")
-
-    return conditions, actions
 
 
 def _add_empty_priority_class_arrays(d):
